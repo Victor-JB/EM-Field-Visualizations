@@ -91,7 +91,8 @@ const vertexShaderSource = `#version 300 es
         v_fieldMag = fieldMag;
 
         vec2 direction = fieldMag > EPSILON ? field / fieldMag : vec2(1.0, 0.0);
-        float arrowLength = u_arrowScale * (0.18 + log(1.0 + fieldMag * 10.0));
+        float displayMag = log(1.0 + fieldMag * 11.0);
+        float arrowLength = u_arrowScale * (0.34 + displayMag);
 
         vec2 localArrow = vec2(a_position.x * aspect, a_position.y);
         vec2 rotatedArrow = rotationFromDirection(direction) * (localArrow * arrowLength);
@@ -108,20 +109,61 @@ const fragmentShaderSource = `#version 300 es
     out vec4 outColor;
 
     void main() {
-        float compressed = log(1.0 + v_fieldMag * 14.0);
-        float ripple = smoothstep(0.35, 1.9, compressed);
-        float glow = smoothstep(0.9, 2.8, compressed);
+        float compressed = log(1.0 + v_fieldMag * 12.0);
+        float ripple = smoothstep(0.08, 1.6, compressed);
+        float glow = smoothstep(0.55, 2.4, compressed);
 
-        vec3 base = vec3(0.02, 0.05, 0.08);
-        vec3 low = vec3(0.08, 0.30, 0.38);
-        vec3 high = vec3(0.38, 0.92, 1.00);
+        vec3 base = vec3(0.10, 0.24, 0.30);
+        vec3 low = vec3(0.16, 0.42, 0.52);
+        vec3 high = vec3(0.42, 0.94, 1.00);
         vec3 core = vec3(0.90, 0.98, 1.00);
 
         vec3 color = mix(base, low, ripple);
         color = mix(color, high, glow);
-        color = mix(color, core, smoothstep(1.8, 3.4, compressed));
+        color = mix(color, core, smoothstep(1.45, 3.1, compressed));
 
         outColor = vec4(color, 1.0);
+    }
+`;
+
+const chargeVertexShaderSource = `#version 300 es
+    precision highp float;
+
+    uniform vec2 u_resolution;
+    uniform float u_time;
+    uniform float u_orbitRadius;
+    uniform float u_angularSpeed;
+    uniform float u_pointSize;
+
+    void main() {
+        float theta = u_angularSpeed * u_time;
+        vec2 chargePos = u_orbitRadius * vec2(cos(theta), sin(theta));
+        float aspect = u_resolution.x / u_resolution.y;
+
+        gl_Position = vec4(chargePos.x / aspect, chargePos.y, 0.0, 1.0);
+        gl_PointSize = u_pointSize;
+    }
+`;
+
+const chargeFragmentShaderSource = `#version 300 es
+    precision highp float;
+
+    out vec4 outColor;
+
+    void main() {
+        vec2 centered = gl_PointCoord - vec2(0.5);
+        float dist = length(centered);
+
+        if (dist > 0.5) {
+            discard;
+        }
+
+        float core = smoothstep(0.12, 0.0, dist);
+        float glow = smoothstep(0.5, 0.08, dist);
+        vec3 color = mix(vec3(0.45, 0.90, 1.00), vec3(1.00, 1.00, 1.00), core);
+        float alpha = max(core, glow * 0.55);
+
+        outColor = vec4(color, alpha);
     }
 `;
 // Helper function to compile shaders
@@ -140,13 +182,24 @@ function createShader(gl: WebGL2RenderingContext, type: number, source: string) 
 const vertexShader = createShader(gl, gl.VERTEX_SHADER, vertexShaderSource);
 const fragmentShader = createShader(gl, gl.FRAGMENT_SHADER, fragmentShaderSource);
 const program = gl.createProgram()!;
+const chargeVertexShader = createShader(gl, gl.VERTEX_SHADER, chargeVertexShaderSource);
+const chargeFragmentShader = createShader(gl, gl.FRAGMENT_SHADER, chargeFragmentShaderSource);
+const chargeProgram = gl.createProgram()!;
 
 gl.attachShader(program, vertexShader!);
 gl.attachShader(program, fragmentShader!);
 gl.linkProgram(program);
 
+gl.attachShader(chargeProgram, chargeVertexShader!);
+gl.attachShader(chargeProgram, chargeFragmentShader!);
+gl.linkProgram(chargeProgram);
+
 if (!gl.getProgramParameter(program, gl.LINK_STATUS)) {
     console.error(gl.getProgramInfoLog(program));
+}
+
+if (!gl.getProgramParameter(chargeProgram, gl.LINK_STATUS)) {
+    console.error(gl.getProgramInfoLog(chargeProgram));
 }
 
 // -- GEOMETRY: Define a simple arrow (a triangle pointing right) --
@@ -157,8 +210,8 @@ const arrowVertices = new Float32Array([
 ]);
 
 // -- INSTANCES: Calculate a grid of positions --
-const gridCols = 40;
-const gridRows = 40;
+const gridCols = 100;
+const gridRows = 100;
 const numInstances = gridCols * gridRows;
 const offsets = new Float32Array(numInstances * 2); // x, y for each instance
 
@@ -207,12 +260,22 @@ const arrowScaleLoc = gl.getUniformLocation(program, "u_arrowScale");
 const coulombStrengthLoc = gl.getUniformLocation(program, "u_coulombStrength");
 const radiationStrengthLoc = gl.getUniformLocation(program, "u_radiationStrength");
 
+const chargeResolutionLoc = gl.getUniformLocation(chargeProgram, "u_resolution");
+const chargeTimeLoc = gl.getUniformLocation(chargeProgram, "u_time");
+const chargeOrbitRadiusLoc = gl.getUniformLocation(chargeProgram, "u_orbitRadius");
+const chargeAngularSpeedLoc = gl.getUniformLocation(chargeProgram, "u_angularSpeed");
+const chargePointSizeLoc = gl.getUniformLocation(chargeProgram, "u_pointSize");
+
 const orbitRadius = 0.32;
-const angularSpeed = 1.8;
+const angularSpeed = 0.9;
 const waveSpeed = 1.35;
-const arrowScale = 0.1;
+const arrowScale = 0.085;
 const coulombStrength = 0.012;
 const radiationStrength = 0.08;
+const chargePointSize = 20;
+
+gl.enable(gl.BLEND);
+gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
 
 // 5. The Render Loop
 function render(time: number) {
@@ -233,6 +296,14 @@ function render(time: number) {
 
     // Draw 3 vertices (the triangle), but do it `numInstances` times!
     gl!.drawArraysInstanced(gl!.TRIANGLES, 0, 3, numInstances);
+
+    gl!.useProgram(chargeProgram);
+    gl!.uniform2f(chargeResolutionLoc, canvas.width, canvas.height);
+    gl!.uniform1f(chargeTimeLoc, time * 0.001);
+    gl!.uniform1f(chargeOrbitRadiusLoc, orbitRadius);
+    gl!.uniform1f(chargeAngularSpeedLoc, angularSpeed);
+    gl!.uniform1f(chargePointSizeLoc, chargePointSize);
+    gl!.drawArrays(gl!.POINTS, 0, 1);
 
     requestAnimationFrame(render);
 }
